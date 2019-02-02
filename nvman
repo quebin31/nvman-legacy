@@ -227,7 +227,7 @@ case $cmd in
         stop_service $arg fancy
         ;;
 
-    'status')
+    'status' | '')
         fancy_status
         ;;
 
