@@ -40,7 +40,7 @@ is_valid_service() {
     esac
 }
 
-get_service() {
+get_service_descriptor() {
     local service=$1
     case $service in
         'bumblebee')
@@ -51,22 +51,22 @@ get_service() {
             ;;
     esac
 
-    echo "$service"
+    echo $service
 }
 
-service_status() {
-    echo "$(systemctl status $(get_service $1) | awk '/Active/ {print $2}')"
+get_service_status() {
+    echo "$(systemctl status $(get_service_descriptor $1) | awk '/Active/ {print $2}')"
 }
 
-service_enabled() {
-    local status=$(systemctl status $(get_service $1) | awk '/Loaded/ { print $4}')
+is_service_enabled() {
+    local status=$(systemctl status $(get_service_descriptor $1) | awk '/Loaded/ { print $4}')
     echo "${status::-1}"
 }
 
 enable_service() {
     local service=$1
 
-    # Toggle services
+    # Toggle service depending on input
     case $service in 
         'bumblebee')
             disable_service optimus
@@ -77,107 +77,101 @@ enable_service() {
     esac 
 
     # If the service is already enabled, exit
-    [[ $(service_enabled $service) = 'enabled' ]] && return 0
-    eval "$system enable $(get_service $service)"
-    fancy_status
+    [[ $(is_service_enabled $service) = 'enabled' ]] && return 0
+    sudo_run "systemctl enable $(get_service_descriptor $service)"
 }
 
 disable_service() {
     local service=$1
 
+    # No toggling, both services can be disabled
+
     # If the service is already disabled, exit
-    [[ $(service_enabled $service) = 'disabled' ]] && return 0
-    eval "$system disable $(get_service $service)"
+    [[ $(is_service_enabled $service) = 'disabled' ]] && return 0
+    sudo_run "systemctl disable $(get_service_descriptor $service)"
 }
 
 
 start_service() {
     local service=$1
-    local print_fancy=$2
 
     # If the service is already active, exit
-    [[ $(service_status $service) = 'active' ]] && return 0
+    [[ $(get_service_status $service) = 'active' ]] && return 0
 
     # Check if willing to activate conflictive services
     case $service in 
         'bumblebee')
-            [[ $(service_status optimus) = 'active' ]] && return 1
+            [[ $(get_service_status optimus) = 'active' ]] && 
+            error_print "Trying to activate conflicting services" && return 1
             ;;
         'optimus')
-            [[ $(service_status bumblebee) = 'active' ]] && return 1
+            [[ $(get_service_status bumblebee) = 'active' ]] && 
+            error_print "Trying to activate conflicting services" && return 1
             ;;
     esac 
 
     # Start the service
-    eval "$system start $(get_service $service)"
-    [[ $print_fancy = 'fancy' ]] && fancy_status
+    sudo_run "systemctl start $(get_service_descriptor $service)"
 }
-
 
 stop_service() {
     local service=$1
-    local print_fancy=$2
 
     # If the service is already inactive, exit
-    [[ $(service_status $service) = 'inactive' ]] && return 0
+    [[ $(get_service_status $service) = 'inactive' ]] && return 0
 
     # Stop the service
-    eval "$system stop $(get_service $service)"
-    [[ $print_fancy = 'fancy' ]] && fancy_status
+    sudo_run "systemctl stop $(get_service_descriptor $service)"
 }
 
-set_default() {
+set_default_service() {
     if [[ ! -d $config_path ]]; then
-        sudo mkdir -p $config_path
+        sudo_run "mkdir -p $config_path"
     fi
 
-    sudo echo "default = $1" > $config
+    sudo_run "(echo default = $1) > $config"
 }
 
-get_default() {
+get_default_service() {
     if [[ ! -e $config ]]; then
-        set_default optimus
+        set_default_service optimus
     fi
 
     echo "$(cat $config | grep '\<default\>' | tr '=' ' ' | awk '{print $2}')"
 }
 
-optimus_mode() {
-    echo "$(optimus-manager --print-mode | awk '{print $4}')"
+get_optimus_mode() {
+    echo "$(optimus-manager --print-mode | awk '/Current/ {print $5}')"
 }
 
-optimus_startup() {
-    echo "$(optimus-manager --print-startup | awk '{print $5}')"
+get_optimus_startup() {
+    echo "$(optimus-manager --print-startup | awk '/Current/ {print $6}')"
 }
 
-fancy_status() {
-    local optimus_color=$Red
-    local bumblebee_color=$Red
+print_status() {
+    local optimus_color=$RED
+    local bumblebee_color=$RED
 
-    local optimus_status=$(service_status optimus)
-    local bumblebee_status=$(service_status bumblebee)
+    local optimus_status=$(get_service_status optimus)
+    local bumblebee_status=$(get_service_status bumblebee)
 
-    if [[ $optimus_status = 'active' ]]; then
-        optimus_color=$Green
-    fi
+    [[ $optimus_status = 'active' ]] && optimus_color=$GREEN
+    [[ $bumblebee_status = 'active' ]] && bumblebee_color=$GREEN
+    
+    # Print optimus overall status
+    echo -n "${BOLD}${WHITE}Optimus:${RESET} ${optimus_color}${optimus_status}${RESET} "
+    echo    "${YELLOW}($(is_service_enabled optimus))${RESET}"
+    # Print bumblebee overall status
+    echo -n "${BOLD}${WHITE}Bumblebee:${RESET} ${bumblebee_color}${bumblebee_status}${RESET} "
+    echo    "${YELLOW}($(is_service_enabled bumblebee))${RESET}"
+    # Print default service
+    echo    "${BOLD}${WHITE}Default service:${RESET} $(get_default_service)"
 
-    if [[ $bumblebee_status = 'active' ]]; then 
-        bumblebee_color=$Green
-    fi
+    [[ $(get_default_service) = 'optimus' ]] &&
+    echo "Default startup for ${BOLD}${WHITE}optimus${RESET} is ${BOLD}${WHITE}$(get_optimus_startup)${RESET}"
 
-    echo -en "${BWhite}Optimus:${Reset} ${optimus_color}${optimus_status}${Reset} "
-    echo -e  "${Yellow}($(service_enabled optimus))${Reset}"
-    echo -en "${BWhite}Bumblebee:${Reset} ${bumblebee_color}${bumblebee_status}${Reset} "
-    echo -e  "${Yellow}($(service_enabled bumblebee))${Reset}"
-    echo -e "${BWhite}Default service:${Reset} $(get_default)"
-
-    if [[ $(get_default) = 'optimus' ]]; then
-        echo -e "Default startup for ${BWhite}optimus${Reset} is ${BWhite}$(optimus_startup)${Reset}"
-    fi
-
-    if [[ $optimus_status = 'active' ]]; then
-        echo -e "Currently using ${BWhite}$(optimus_mode)${Reset} with ${BWhite}optimus${Reset}"
-    fi
+    [[ $(is_service_enabled optimus) = 'enabled' ]] &&
+    echo "Currently using ${BOLD}${WHITE}$(get_optimus_mode)${RESET} with ${BOLD}${WHITE}optimus${RESET}"
 }
 
 cmd=$1
@@ -187,12 +181,14 @@ shift
 
 case $cmd in 
     'run')
-        # Check if optimus service is active and is using nvidia, fatal error
-        optimus_status=$(service_status optimus)
-        if [[ $optimus_status = 'active' ]] && [[ $(optimus_mode) = 'nvidia' ]]; then
-            echo -e "${Red}Error:${Reset} Currently using nvidia with optimus"
+        # Check if optimus service is active and it's using nvidia, fatal error
+        optimus_status=$(get_service_status optimus)
+        if [[ $optimus_status = 'active' ]] && [[ $(get_optimus_mode) = 'nvidia' ]]; then
+            error_print "Currently using nvidia with optimus!"
             exit 1
         fi
+
+        echo "${CYAN}==>${RESET} Running $arg $@"
 
         # Toggle services
         stop_service optimus
@@ -203,10 +199,6 @@ case $cmd in
         ;;
 
     'switch')
-        if [[ $(id -u) != 0 ]]; then
-            echo -en "${Yellow}It's recommended to run this sub command with sudo, in "
-            echo -e  "order to avoid dialogs${Reset}"
-        fi
         gpu=$arg
 
         # Toggle services
@@ -214,90 +206,73 @@ case $cmd in
         start_service optimus
 
         # Switch modes
-        optimus-manager --switch $gpu --no-confirm
+        echo "${CYAN}==>${RESET} Switching to $gpu" && sleep 1
+        sudo_run "optimus-manager --switch $gpu --no-confirm &> /dev/null"
         ;;
 
     'start')
-        if [[ $(id -u) != 0 ]]; then
-            echo -en "${Yellow}It's recommended to run this sub command with sudo, in "
-            echo -e  "order to avoid dialogs${Reset}"
-        fi
-
-        if [[ $(valid_service $arg) = 'invalid' ]]; then
-            echo -e "${Red}Error:${Reset} Unrecognized service '$arg'!"
+        if [[ $(is_valid_service $arg) = 'invalid' ]]; then
+            error_print "Unknown service '$arg'!"
             exit 1
         fi
 
-        start_service $arg fancy
+        echo "${CYAN}==>${RESET} Starting service $arg"
+        start_service $arg 
         ;; 
 
     'stop')
-        if [[ $(id -u) != 0 ]]; then
-            echo -en "${Yellow}It's recommended to run this sub command with sudo, in "
-            echo -e  "order to avoid dialogs${Reset}"
-        fi
-
-        if [[ $(valid_service $arg) = 'invalid' ]]; then
-            echo -e "${Red}Error:${Reset} Unrecognized service '$arg'!"
+        if [[ $(is_valid_service $arg) = 'invalid' ]]; then
+            error_print "Unknown service '$arg'!"
             exit 1
         fi
 
-        stop_service $arg fancy
+        echo "${CYAN}==>${RESET} Stopping service $arg"
+        stop_service $arg 
         ;;
 
     'status' | '')
-        fancy_status
+        print_status
         ;;
 
     'default')
-        if [[ $(id -u) != 0 ]]; then
-            echo -en "${Yellow}It's recommended to run this sub command with sudo, in "
-            echo -e  "order to avoid dialogs${Reset}"
-        fi
-
-        if [[ $(valid_service $arg) = 'invalid' ]]; then
-            echo -e "${Red}Error:${Reset} Unrecognized service '$arg'!"
+        if [[ $(is_valid_service $arg) = 'invalid' ]]; then
+            error_print "Unknown service '$arg'!"
             exit 1
         fi
 
-        set_default $arg
+        echo "${CYAN}==>${RESET} Setting default service to $arg"
+        set_default_service $arg
         enable_service $arg
         ;;
 
     'startup')
-        if [[ $(id -u) != 0 ]]; then
-            echo -en "${Yellow}It's recommended to run this sub command with sudo, in "
-            echo -e  "order to avoid dialogs${Reset}"
-        fi
-
-        optimus_status=$(service_status optimus)
-        if [[ $optimus_status = 'inactive' ]]; then
+        optimus_status=$(get_service_status optimus)
+        if [[ $optimus_status = 'inactive' ]]; then 
+            stop_service bumblebee
             start_service optimus
         fi
 
-        optimus-manager --set-startup $arg
+        echo "${CYAN}==>${RESET} Setting default startup to $arg"
+        sudo_run "optimus-manager --set-startup $arg &> /dev/null"
 
         if [[ $optimus_status = 'inactive' ]]; then
             stop_service optimus
+            start_service bumblebee 
         fi
 
-        fancy_status
-
-        if [[ $(get_default) != 'optimus' ]]; then
-            echo -e "Default startup for ${BWhite}optimus${Reset} is ${BWhite}$(optimus_startup)${Reset}"
-        fi
+        echo "${CYAN}==>${RESET} Default startup for ${BOLD}${WHITE}optimus${RESET} is ${BOLD}${WHITE}$(get_optimus_startup)${RESET}"
         ;;
 
     'inspector')
-        if [[ $(service_enabled optimus) = 'enabled' ]] && 
-            [[ $(service_enabled bumblebee) = 'enabled' ]]; then
-            enable_service $(get_default)
+        if [[ $(is_service_enabled optimus) = 'enabled' ]] && 
+            [[ $(is_service_enabled bumblebee) = 'enabled' ]]; then
+            enable_service $(get_default_service)
             exit 0
         fi
 
-        if [[ $(service_enabled optimus) = 'disabled' ]] && 
-            [[ $(service_enabled bumblebee) = 'disabled' ]]; then
-            enable_service $(get_default)
+        if [[ $(is_service_enabled optimus) = 'disabled' ]] && 
+            [[ $(is_service_enabled bumblebee) = 'disabled' ]]; then
+            enable_service $(get_default_service)
             exit 0
         fi
 
