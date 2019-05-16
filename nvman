@@ -7,7 +7,7 @@ CYAN=$(tput setaf 6)
 BOLD=$(tput bold)
 RESET=$(tput sgr0)
 
-version="1.2.0"
+version="1.2.1"
 config_path="/etc/nvman"
 config="${config_path}/config"
 
@@ -59,7 +59,7 @@ get_service_status() {
 }
 
 is_service_enabled() {
-    local status=$(systemctl status $(get_service_descriptor $1) | awk '/Loaded/ { print $4}')
+    local status=$(systemctl status $(get_service_descriptor $1) | awk '/Loaded: loaded/ { print $4}')
     echo "${status::-1}"
 }
 
@@ -206,8 +206,9 @@ case $cmd in
         start_service optimus
 
         # Switch modes
-        echo "${CYAN}==>${RESET} Switching to $gpu" && sleep 1
-        sudo_run "optimus-manager --switch $gpu --no-confirm &> /dev/null"
+        echo "${CYAN}==>${RESET} Switching to $gpu"
+        sudo_run "sleep 1" # Do nothing but prompt message
+        optimus-manager --switch $gpu --no-confirm &> /dev/null
         ;;
 
     'start')
@@ -253,7 +254,8 @@ case $cmd in
         fi
 
         echo "${CYAN}==>${RESET} Setting default startup to $arg"
-        sudo_run "optimus-manager --set-startup $arg &> /dev/null"
+        sudo_run "sleep 0" # Do nothing but prompt message
+        optimus-manager --set-startup $arg &> /dev/null
 
         if [[ $optimus_status = 'inactive' ]]; then
             stop_service optimus
