@@ -7,7 +7,7 @@ CYAN=$(tput setaf 6)
 BOLD=$(tput bold)
 RESET=$(tput sgr0)
 
-version="1.2.1"
+version="1.2.2"
 config_path="/etc/nvman"
 config="${config_path}/config"
 
