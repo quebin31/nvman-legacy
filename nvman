@@ -305,7 +305,7 @@ case $cmd in
 
     'help')
         echo "Usage: $0 command"
-        echo "Version 1.0"
+        echo "Version $version"
         echo ""
         echo "  run <command...>    Run the command with primusrun (using bumblebee)"
         echo "  switch <gpu>        Switch gpu with optimus-manager (using optimus)"
@@ -317,5 +317,7 @@ case $cmd in
         echo "  help                Show this help"
         ;;
     *)
-        echo -e "${Red}Error:${Reset} Unrecognized command '$cmd'!"
+        error_print "Unknown command '$cmd'!"
+        exit 1
+        ;;
 esac
