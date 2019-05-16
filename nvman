@@ -129,7 +129,7 @@ set_default_service() {
         sudo_run "mkdir -p $config_path"
     fi
 
-    sudo_run "(echo default = $1) > $config"
+    sudo_run "echo default = $1 > $config"
 }
 
 get_default_service() {
