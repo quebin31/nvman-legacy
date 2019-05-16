@@ -1,17 +1,35 @@
 #!/bin/bash
 
-Red='\033[0;31m'
-Reset='\033[0m'
-Green='\033[0;32m'
-Yellow='\033[0;33m'
-BWhite='\033[1;37m'       
+RED=$(tput setaf 1)
+GREEN=$(tput setaf 2)
+YELLOW=$(tput setaf 3)
+CYAN=$(tput setaf 6)
+BOLD=$(tput bold)
+RESET=$(tput sgr0)
 
+version="1.2.0"
 config_path="/etc/nvman"
 config="${config_path}/config"
 
-system='systemctl'
+error_print() {
+    echo "${RED}${BOLD}Error:${RESET} $@"
+}
 
-valid_service() {
+if [[ $(id -u) -eq 0 ]]; then
+    error_print "Don't run this script as root"
+    exit 1
+fi
+
+sudo_run() {
+    sudo -n true &> /dev/null 
+
+    [[ $? -eq 1 ]] && 
+    echo "${GREEN}==>${RESET} Privilege scalation needed"
+
+    eval "sudo $@"
+}
+
+is_valid_service() {
     case $1 in 
         'bumblebee' | 'optimus')
             echo 'valid'
