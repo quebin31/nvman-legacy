@@ -11,11 +11,16 @@ version="1.2.2"
 config_path="/etc/nvman"
 config="${config_path}/config"
 
+cmd=$1
+arg=$2
+shift
+shift
+
 error_print() {
     echo "${RED}${BOLD}Error:${RESET} $@"
 }
 
-if [[ $(id -u) -eq 0 ]]; then
+if [[ $cmd != 'inspector' ]] && [[ $(id -u) -eq 0 ]]; then
     error_print "Don't run this script as root"
     exit 1
 fi
@@ -174,10 +179,6 @@ print_status() {
     echo "Currently using ${BOLD}${WHITE}$(get_optimus_mode)${RESET} with ${BOLD}${WHITE}optimus${RESET}"
 }
 
-cmd=$1
-arg=$2
-shift
-shift
 
 case $cmd in 
     'run')
