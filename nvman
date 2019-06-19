@@ -1,30 +1,28 @@
 #!/bin/bash
 
+# ================================================================================
+# Colorize output.
+# ================================================================================
 RED=$(tput setaf 1)
 GREEN=$(tput setaf 2)
 YELLOW=$(tput setaf 3)
 CYAN=$(tput setaf 6)
 BOLD=$(tput bold)
 RESET=$(tput sgr0)
+# ================================================================================
 
-version="1.2.2"
+# ================================================================================
+# nvman variables.
+# ================================================================================
+version="1.3.0"
 config_path="/etc/nvman"
-config="${config_path}/config"
+config_file="${config_path}/config"
+# ================================================================================
 
-cmd=$1
-arg=$2
-shift
-shift
-
-error_print() {
-    echo "${RED}${BOLD}Error:${RESET} $@"
-}
-
-if [[ $cmd != 'inspector' ]] && [[ $(id -u) -eq 0 ]]; then
-    error_print "Don't run this script as root"
-    exit 1
-fi
-
+# ================================================================================
+# Utility function, run the following command as root, pretty print when needing 
+# privelege scalation.
+# ================================================================================
 sudo_run() {
     sudo -n true &> /dev/null 
 
@@ -34,18 +32,37 @@ sudo_run() {
     eval "sudo $@"
 }
 
-is_valid_service() {
+# ================================================================================
+# Check if $1 is a valid value for service (bumblebee or optimus).
+# ================================================================================
+valid_service() {
     case $1 in 
         'bumblebee' | 'optimus')
-            echo 'valid'
+            echo 1
             ;;
         *)
-            echo 'invalid'
+            echo 0
             ;;
     esac
 }
 
-get_service_descriptor() {
+valid_gpu() {
+    case $1 in
+        'intel' | 'nvidia' | 'auto')
+            echo 1
+            ;;
+        *)
+            echo 0
+            ;;
+    esac
+}
+
+# ================================================================================
+# Get the service file descriptor:
+#   optimus    -> optimus-manager.service
+#   bumbleblee -> bumblebeed.service
+# ================================================================================
+service_descriptor() {
     local service=$1
     case $service in
         'bumblebee')
@@ -59,15 +76,25 @@ get_service_descriptor() {
     echo $service
 }
 
-get_service_status() {
-    echo "$(systemctl status $(get_service_descriptor $1) | awk '/Active/ {print $2}')"
+# ================================================================================
+# Prints active or inactive, depending on the service status.
+# ================================================================================
+service_status() {
+    echo "$(systemctl status $(service_descriptor $1) | awk '/Active/ {print $2}')"
 }
 
-is_service_enabled() {
-    local status=$(systemctl status $(get_service_descriptor $1) | awk '/Loaded: loaded/ { print $4}')
+# ================================================================================
+# Prints enabled or disabled, depending on the service status.
+# ================================================================================
+service_enabled() {
+    local status=$(systemctl status $(service_descriptor $1) | awk '/Loaded: loaded/ { print $4}')
     echo "${status::-1}"
 }
 
+# ================================================================================
+# Utility function to enable a service, check if willing to enable conflictive 
+# services, if that's the case, toggle them.
+# ================================================================================
 enable_service() {
     local service=$1
 
@@ -82,110 +109,273 @@ enable_service() {
     esac 
 
     # If the service is already enabled, exit
-    [[ $(is_service_enabled $service) = 'enabled' ]] && return 0
-    sudo_run "systemctl enable $(get_service_descriptor $service)"
+    [[ $(service_enabled $service) = 'enabled' ]] && return 0
+    sudo_run "systemctl enable $(service_descriptor $service) &> /dev/null"
 }
 
+# ================================================================================
+# Utility function to disable a service, no special checks, it's okay to have both
+# disabled.
+# ================================================================================
 disable_service() {
     local service=$1
 
-    # No toggling, both services can be disabled
-
     # If the service is already disabled, exit
-    [[ $(is_service_enabled $service) = 'disabled' ]] && return 0
-    sudo_run "systemctl disable $(get_service_descriptor $service)"
+    [[ $(service_enabled $service) = 'disabled' ]] && return 0
+    sudo_run "systemctl disable $(service_descriptor $service) &> /dev/null"
 }
 
-
+# ================================================================================
+# Utility function to start a service, check if willing to start conflictive 
+# services, if that's the case, toggle them.
+# ================================================================================
 start_service() {
     local service=$1
 
     # If the service is already active, exit
-    [[ $(get_service_status $service) = 'active' ]] && return 0
+    [[ $(service_status $service) = 'active' ]] && return 0
 
     # Check if willing to activate conflictive services
     case $service in 
         'bumblebee')
-            [[ $(get_service_status optimus) = 'active' ]] && 
-            error_print "Trying to activate conflicting services" && return 1
+            [[ $(service_status optimus) = 'active' ]] && 
+            print_error "Trying to activate conflicting services" && return 1
             ;;
         'optimus')
-            [[ $(get_service_status bumblebee) = 'active' ]] && 
-            error_print "Trying to activate conflicting services" && return 1
+            [[ $(service_status bumblebee) = 'active' ]] && 
+            print_error "Trying to activate conflicting services" && return 1
             ;;
     esac 
 
     # Start the service
-    sudo_run "systemctl start $(get_service_descriptor $service)"
+    sudo_run "systemctl start $(service_descriptor $service)"
 }
 
+# ================================================================================
+# Utility function to stop a service, no special checks, it's okay to have both
+# stopped.
+# ================================================================================
 stop_service() {
     local service=$1
 
     # If the service is already inactive, exit
-    [[ $(get_service_status $service) = 'inactive' ]] && return 0
+    [[ $(service_status $service) = 'inactive' ]] && return 0
 
     # Stop the service
-    sudo_run "systemctl stop $(get_service_descriptor $service)"
+    sudo_run "systemctl stop $(service_descriptor $service)"
 }
 
-set_default_service() {
-    if [[ ! -d $config_path ]]; then
-        sudo_run "mkdir -p $config_path"
-    fi
-
-    echo "default = $1" | sudo_run "tee $config &> /dev/null"
+# ================================================================================
+# Print with 'Error:' 
+# ================================================================================
+print_error() {
+    echo "${RED}${BOLD}Error:${RESET} $@"
 }
 
-get_default_service() {
-    if [[ ! -e $config ]]; then
-        set_default_service optimus
-    fi
+# ================================================================================
+# Utility function to read NVIDIA GPU status, prints on or off
+# ================================================================================
+get_nvidia_status() {
+    local status=$(cat /proc/acpi/bbswitch | awk '{printf $2}')    
+    echo "$(echo -n $status | tr '[:upper:]' '[:lower:]')"
+}
+# ================================================================================
 
-    echo "$(cat $config | grep '\<default\>' | tr '=' ' ' | awk '{print $2}')"
+# ================================================================================
+# Print status utility functions
+# ================================================================================
+print_optimus() {
+    first=$(echo -n "${BOLD}${WHITE}Optimus :${RESET} ${optimus_color}${optimus_status}${RESET} ")
+    second=$(echo -n "${YELLOW}($(service_enabled optimus))${RESET}")
+
+    echo "$first $second"
 }
 
-get_optimus_mode() {
-    echo "$(optimus-manager --print-mode | awk '/Current/ {print $5}')"
+print_bumblebee() {
+    first=$(echo -n "${BOLD}${WHITE}Bumblebee :${RESET} ${bumblebee_color}${bumblebee_status}${RESET} ")
+    second=$(echo -n "${YELLOW}($(service_enabled bumblebee))${RESET}")
+
+    echo "$first $second"
 }
 
-get_optimus_startup() {
-    echo "$(optimus-manager --print-startup | awk '/Current/ {print $6}')"
+print_nvidia() {
+    echo "${BOLD}${WHITE}NVIDIA GPU :${RESET} $(get_nvidia_status)"
+}
+
+print_default() {
+    echo "${BOLD}${WHITE}Default service :${RESET} $(get_default_service)"
+}
+
+print_optimus_mode() {
+    echo "${BOLD}${WHITE}Optimus mode :${RESET} $(get_optimus_mode)"
+}
+
+print_optimus_startup() {
+    echo "${BOLD}${WHITE}Optimus startup :${RESET} $(get_optimus_startup)"
 }
 
 print_status() {
     local optimus_color=$RED
     local bumblebee_color=$RED
 
-    local optimus_status=$(get_service_status optimus)
-    local bumblebee_status=$(get_service_status bumblebee)
+    local optimus_status=$(service_status optimus)
+    local bumblebee_status=$(service_status bumblebee)
 
     [[ $optimus_status = 'active' ]] && optimus_color=$GREEN
     [[ $bumblebee_status = 'active' ]] && bumblebee_color=$GREEN
     
     # Print optimus overall status
-    echo -n "${BOLD}${WHITE}Optimus:${RESET} ${optimus_color}${optimus_status}${RESET} "
-    echo    "${YELLOW}($(is_service_enabled optimus))${RESET}"
+    print_optimus | awk '{printf "%-20s %s %-20s %s\n", $1, $2, $3, $4 }'
+    
     # Print bumblebee overall status
-    echo -n "${BOLD}${WHITE}Bumblebee:${RESET} ${bumblebee_color}${bumblebee_status}${RESET} "
-    echo    "${YELLOW}($(is_service_enabled bumblebee))${RESET}"
+    print_bumblebee | awk '{printf "%-20s %s %-20s %s\n", $1, $2, $3, $4 }'
+    
+    # Print NVIDIA GPU status
+    print_nvidia | awk '{printf "%s %-9s %s %s\n", $1, $2, $3, $4 }'
+
     # Print default service
-    echo    "${BOLD}${WHITE}Default service:${RESET} $(get_default_service)"
+    print_default | awk '{printf "%s %-8s %s %s\n", $1, $2, $3, $4 }'
 
+    # Print optimus mode (if active)
+    [[ $(service_status optimus) = 'active' ]] &&
+    print_optimus_mode | awk '{printf "%s %-8s %s %s\n", $1, $2, $3, $4 }'
+
+    # Print optimus startup (if enabled)
     [[ $(get_default_service) = 'optimus' ]] &&
-    echo "Default startup for ${BOLD}${WHITE}optimus${RESET} is ${BOLD}${WHITE}$(get_optimus_startup)${RESET}"
+    print_optimus_startup | awk '{printf "%s %-8s %s %s\n", $1, $2, $3, $4 }'
+}
+# ================================================================================
 
-    [[ $(is_service_enabled optimus) = 'enabled' ]] &&
-    echo "Currently using ${BOLD}${WHITE}$(get_optimus_mode)${RESET} with ${BOLD}${WHITE}optimus${RESET}"
+# ================================================================================
+# Write to config_file the default service to be enabled at boot.
+# ================================================================================
+set_default_service() {
+    if [[ ! -d $config_path ]]; then
+        sudo_run "mkdir -p $config_path"
+    fi
+
+    echo "default = $1" | sudo_run "tee $config_file &> /dev/null"
+}
+
+# ================================================================================
+# Read from config_file the default service to be enabled at boot.
+# If there's no config_file, call set_default_service optimus.
+# ================================================================================
+get_default_service() {
+    if [[ ! -e $config_file ]]; then
+        set_default_service optimus
+    fi
+
+    echo "$(cat $config_file | grep '\<default\>' | tr '=' ' ' | awk '{print $2}')"
+}
+
+# ================================================================================
+# Utility function to read optimus mode, prints intel or nvidia 
+# ================================================================================
+get_optimus_mode() {
+    echo "$(optimus-manager --print-mode | awk '/Current/ {print $5}')"
+}
+
+# ================================================================================
+# Utility function to read optimus startup, prints intel or nvidia 
+# ================================================================================
+get_optimus_startup() {
+    echo "$(optimus-manager --print-startup | awk '/Current/ {print $6}')"
+}
+# ================================================================================
+# Check if using gdm, suggest wiki read
+# ================================================================================
+check_gdm_prime() {
+    local gdm_name=$(pacman -Qq gdm)
+
+    [[ $(service_enabled 'gdm.service') = 'disabled' ]] && return
+
+    local bad_flag=false
+
+    if [[ $gdm_name != 'gdm-prime' ]]; then
+        print_error "Seems like you're using GDM, but you don't have gdm-prime installed."
+        bad_flag=true
+    fi
+
+    local xorg_gdm=$(cat /etc/gdm/custom.conf | grep '\<WaylandEnable\>' | cut -dW -f 1)
+    if [[ $xorg_gdm = '#' ]]; then 
+        print_error "Please disable wayland for GDM /etc/gdm/custom.conf"
+        bad_flag=true
+    fi
+
+    $bad_flag && exit 1
+}
+
+# ================================================================================
+
+# ================================================================================
+# Print usage (help)
+# ================================================================================
+print_usage() {
+    echo "Usage: $0 command"
+    echo "Version $version"
+    echo ""
+    echo "Commands:"
+    echo "  nvidia  <on|off>                Turn on/off NVIDIA GPU, useful for CUDA"
+    echo "  run     <cmd>                   Run any command with primusrun"
+    echo "  switch  <nvidia|intel|auto>     Switch gpu using optimus-manager"
+    echo "  startup <nvidia|intel>          Set startup gpu for optimus service"
+    echo "  default <bumblebee|optimus>     Set default service at boot"
+    echo "  start   <bumblebee|optimus>     Manually start the service"
+    echo "  stop    <bumblebee|optimus>     Manually stop the service"
+    echo ""
+    echo "  help                            Show this help"
+    echo "  status                          Show the current status of both services"
 }
 
 
+# ================================================================================
+# Main section
+# ================================================================================
+
+# Read arguments
+cmd=$1
+arg=$2
+shift
+shift
+
+# Check if the script is being run as root, the only exception is if it's using the
+# command 'inspector'
+if [[ $cmd != 'inspector' ]] && [[ $(id -u) -eq 0 ]]; then
+    print_error "Don't run this script as root"
+    exit 1
+fi
+
 case $cmd in 
+    'nvidia')
+        # Check if optimus service is active and it's using nvidia, fatal error
+        optimus_status=$(service_status optimus)
+        if [[ $optimus_status = 'active' ]] && [[ $(get_optimus_mode) = 'nvidia' ]]; then
+            print_error "Currently using nvidia with optimus!"
+            exit 1
+        fi
+
+        case $arg in
+            'on')
+                sudo_run "tee /proc/acpi/bbswitch <<< ON &> /dev/null"
+                ;;
+            'off')
+                sudo_run "rmmod nvidia_uvm &> /dev/null | true" 
+                sudo_run "rmmod nvidia_modeset &> /dev/null | true"
+                sudo_run "rmmod nvidia &>/dev/null | true"
+                sudo_run "tee /proc/acpi/bbswitch <<< OFF &> /dev/null"
+                ;;
+            *)
+                print_error "Invalid value $arg"
+                ;;
+        esac
+
+        ;;
     'run')
         # Check if optimus service is active and it's using nvidia, fatal error
-        optimus_status=$(get_service_status optimus)
+        optimus_status=$(service_status optimus)
         if [[ $optimus_status = 'active' ]] && [[ $(get_optimus_mode) = 'nvidia' ]]; then
-            error_print "Currently using nvidia with optimus!"
+            print_error "Currently using nvidia with optimus!"
             exit 1
         fi
 
@@ -201,6 +391,12 @@ case $cmd in
 
     'switch')
         gpu=$arg
+        if [[ $(valid_gpu $gpu) = '0' ]]; then
+            print_error "Invalid GPU value '$gpu'!"
+            exit 1
+        fi
+
+        check_gdm_prime 
 
         # Toggle services
         stop_service bumblebee
@@ -208,13 +404,13 @@ case $cmd in
 
         # Switch modes
         echo "${CYAN}==>${RESET} Switching to $gpu"
-        sudo_run "sleep 1" # Do nothing but prompt message
+        sudo_run "true" # Do nothing but prompt message
         optimus-manager --switch $gpu --no-confirm &> /dev/null
         ;;
 
     'start')
-        if [[ $(is_valid_service $arg) = 'invalid' ]]; then
-            error_print "Unknown service '$arg'!"
+        if [[ $(valid_service $arg) = '0' ]]; then
+            print_error "Unknown service '$arg'!"
             exit 1
         fi
 
@@ -223,8 +419,8 @@ case $cmd in
         ;; 
 
     'stop')
-        if [[ $(is_valid_service $arg) = 'invalid' ]]; then
-            error_print "Unknown service '$arg'!"
+        if [[ $(valid_service $arg) = '0' ]]; then
+            print_error "Unknown service '$arg'!"
             exit 1
         fi
 
@@ -237,8 +433,8 @@ case $cmd in
         ;;
 
     'default')
-        if [[ $(is_valid_service $arg) = 'invalid' ]]; then
-            error_print "Unknown service '$arg'!"
+        if [[ $(valid_service $arg) = '0' ]]; then
+            print_error "Unknown service '$arg'!"
             exit 1
         fi
 
@@ -248,14 +444,19 @@ case $cmd in
         ;;
 
     'startup')
-        optimus_status=$(get_service_status optimus)
+        if [[ $(valid_gpu $arg) = '0' ]] || [[ $arg = 'auto' ]]; then
+            print_error "Invalid GPU value '$arg'!"
+            exit 1
+        fi
+
+        optimus_status=$(service_status optimus)
         if [[ $optimus_status = 'inactive' ]]; then 
             stop_service bumblebee
             start_service optimus
         fi
 
         echo "${CYAN}==>${RESET} Setting default startup to $arg"
-        sudo_run "sleep 0" # Do nothing but prompt message
+        sudo_run "true" # Do nothing but prompt message
         optimus-manager --set-startup $arg &> /dev/null
 
         if [[ $optimus_status = 'inactive' ]]; then
@@ -267,14 +468,14 @@ case $cmd in
         ;;
 
     'inspector')
-        if [[ $(is_service_enabled optimus) = 'enabled' ]] && 
-            [[ $(is_service_enabled bumblebee) = 'enabled' ]]; then
+        if [[ $(service_enabled optimus) = 'enabled' ]] && 
+            [[ $(service_enabled bumblebee) = 'enabled' ]]; then
             enable_service $(get_default_service)
             exit 0
         fi
 
-        if [[ $(is_service_enabled optimus) = 'disabled' ]] && 
-            [[ $(is_service_enabled bumblebee) = 'disabled' ]]; then
+        if [[ $(service_enabled optimus) = 'disabled' ]] && 
+            [[ $(service_enabled bumblebee) = 'disabled' ]]; then
             enable_service $(get_default_service)
             exit 0
         fi
@@ -282,20 +483,12 @@ case $cmd in
         ;;
 
     'help')
-        echo "Usage: $0 command"
-        echo "Version $version"
-        echo ""
-        echo "  run <command...>    Run the command with primusrun (using bumblebee)"
-        echo "  switch <gpu>        Switch gpu with optimus-manager (using optimus)"
-        echo "  default <service>   Set default service to start at boot (enable it)"
-        echo "  startup <gpu>       Set startup for optimus service"
-        echo "  start <service>     Manually start the service"
-        echo "  stop <service>      Manually stop the service"
-        echo "  status              Show the current status of both services"
-        echo "  help                Show this help"
+        print_usage
         ;;
     *)
-        error_print "Unknown command '$cmd'!"
+        print_error "Unknown command '$cmd'!"
+        print_usage 
         exit 1
         ;;
 esac
+# ================================================================================
