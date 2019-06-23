@@ -273,14 +273,14 @@ get_default_service() {
 # Utility function to read optimus mode, prints intel or nvidia 
 # ================================================================================
 get_optimus_mode() {
-    echo "$(optimus-manager --print-mode | awk '/Current/ {print $5}')"
+    echo "$(optimus-manager --print-mode | awk '/mode/ {print $5}')"
 }
 
 # ================================================================================
 # Utility function to read optimus startup, prints intel or nvidia 
 # ================================================================================
 get_optimus_startup() {
-    echo "$(optimus-manager --print-startup | awk '/Current/ {print $6}')"
+    echo "$(optimus-manager --print-startup | awk '/startup/ {print $7}')"
 }
 # ================================================================================
 # Check if using gdm, suggest wiki read
